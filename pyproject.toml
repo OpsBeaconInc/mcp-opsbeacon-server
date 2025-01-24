@@ -1,0 +1,24 @@
+[project]
+name = "mcp-opsbeacon-server"
+version = "0.1.0"
+description = "MCP server for Opsbeacon operations"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic",
+    "aiohttp",
+    "python-json-logger"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project.scripts]
+mcp_opsbeacon_server = "mcp_opsbeacon_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_opsbeacon_server"]
