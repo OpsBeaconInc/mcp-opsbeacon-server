@@ -31,7 +31,10 @@ pip install -e .
 
 ## Configuration
 
-Add the MCP server configuration to Claude Desktop's config file (usually located at `~/.config/claude-desktop/claude_desktop_config.json`):
+There are two ways to provide your Opsbeacon API token, depending on your use case:
+
+### Option 1: Using with Claude Desktop
+If you want to use the MCP server with Claude, add the token to Claude Desktop's config file:
 
 ```json
 {
@@ -50,17 +53,20 @@ Add the MCP server configuration to Claude Desktop's config file (usually locate
 }
 ```
 
-Replace `your-bearer-token-here` with your actual Opsbeacon API bearer token.
+### Option 2: Using without Claude
+If you want to use the MCP server directly (e.g., for testing or development), you can set the token as an environment variable:
+
+```bash
+export OPSBEACON_TOKEN="your-bearer-token-here"
+```
+
+You can use either option or both simultaneously. Just replace `your-bearer-token-here` with your actual Opsbeacon API bearer token.
 
 ## Testing
 
-You can test the server functionality using the provided test script:
+To test the server functionality using the provided test script, make sure you have set the OPSBEACON_TOKEN environment variable (Option 2 above), then run:
 
 ```bash
-# Set the token environment variable
-export OPSBEACON_TOKEN="your-bearer-token-here"
-
-# Run the test script
 python test_server.py
 ```
 

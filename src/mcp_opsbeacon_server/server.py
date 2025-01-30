@@ -9,6 +9,7 @@ from mcp.server import NotificationOptions, Server
 import mcp.server.stdio
 from typing import Any
 from pydantic import AnyUrl
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -28,32 +29,13 @@ class OpsbeaconClient:
         self.initialized = False
 
     def _get_token(self) -> str:
-        """Get bearer token from claude_desktop_config.json"""
-        try:
-            config_path = os.path.expanduser("~/Library/Application Support/Claude/claude_desktop_config.json")
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-                if (config.get('mcpServers') and 
-                    config['mcpServers'].get('opsbeacon') and 
-                    config['mcpServers']['opsbeacon'].get('env') and 
-                    config['mcpServers']['opsbeacon']['env'].get('OPSBEACON_TOKEN')):
-                    return config['mcpServers']['opsbeacon']['env']['OPSBEACON_TOKEN']
-                else:
-                    error_msg = "OPSBEACON_TOKEN not found in claude_desktop_config.json"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-        except FileNotFoundError:
-            error_msg = f"claude_desktop_config.json not found at {config_path}"
+        """Get bearer token from environment variable"""
+        token = os.getenv('OPSBEACON_TOKEN')
+        if not token:
+            error_msg = "OPSBEACON_TOKEN environment variable is not set"
             logger.error(error_msg)
             raise ValueError(error_msg)
-        except json.JSONDecodeError:
-            error_msg = "Invalid JSON in claude_desktop_config.json"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        except Exception as e:
-            error_msg = f"Error reading token from config: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        return token
 
     async def _get_session(self):
         """Get or create aiohttp session"""
@@ -99,31 +81,6 @@ class OpsbeaconClient:
             logger.error(f"Error listing connections: {e}")
             raise
 
-    async def get_execution_logs(self, start_date: str, end_date: str, page: int = 1, limit: int = 10) -> dict:
-        """Get execution logs for a specific date range"""
-        try:
-            params = {
-                'startDate': start_date,
-                'endDate': end_date,
-                'page': str(page),
-                'limit': str(limit),
-                'orderBy': 'timestamp',
-                'direction': 'desc'
-            }
-            
-            session = await self._get_session()
-            async with session.get(f"{self.base_url}/workspace/v2/eventlogs", params=params) as response:
-                response.raise_for_status()
-                text = await response.text()
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    logger.error(f"Non-JSON response from API: {text}")
-                    return {"error": "Invalid response format", "response": text}
-        except Exception as e:
-            logger.error(f"Error getting execution logs: {e}")
-            raise
-
     async def execute_operation(self, connection: str, command: str, arguments: list[tuple[str, str]] = None) -> dict:
         """Execute an Opsbeacon operation"""
         try:
@@ -150,6 +107,59 @@ class OpsbeaconClient:
                     return {"error": "Invalid response format", "response": text}
         except Exception as e:
             logger.error(f"Error executing operation: {e}")
+            raise
+
+    async def get_execution_logs(self, timeframe: str, page: int = 1, limit: int = 10) -> dict:
+        """Get execution logs for a specific timeframe"""
+        try:
+            # Calculate start and end dates based on timeframe
+            today = datetime.now()
+            if timeframe == "today":
+                start_date = today
+                end_date = today
+            elif timeframe == "yesterday":
+                start_date = today - timedelta(days=1)
+                end_date = start_date
+            elif timeframe == "last week":
+                start_date = today - timedelta(days=7)
+                end_date = today
+            else:
+                # Default to last 7 days
+                start_date = today - timedelta(days=7)
+                end_date = today
+            
+            # Format dates as YYYYMMDD
+            start_str = start_date.strftime('%Y%m%d')
+            end_str = end_date.strftime('%Y%m%d')
+
+            # Construct URL with parameters
+            url = (f"{self.base_url}/workspace/v2/eventlogs"
+                  f"?startDate={start_str}"
+                  f"&endDate={end_str}"
+                  f"&page={page}"
+                  f"&limit={limit}"
+                  f"&orderBy=timestamp"
+                  f"&direction=desc")
+
+            logger.debug(f"Requesting execution logs with URL: {url}")
+            session = await self._get_session()
+            async with session.get(url) as response:
+                response.raise_for_status()
+                text = await response.text()
+                try:
+                    return json.loads(text)
+                except json.JSONDecodeError:
+                    logger.error(f"Non-JSON response from API: {text}")
+                    return {
+                        "error": "Invalid response format",
+                        "response": text,
+                        "timeframe": {
+                            "start": start_str,
+                            "end": end_str
+                        }
+                    }
+        except Exception as e:
+            logger.error(f"Error getting execution logs: {e}")
             raise
 
     async def close(self):
@@ -246,17 +256,17 @@ async def main():
             ),
             types.Tool(
                 name="executionlogs",
-                description="Get execution logs for a specific date range",
+                description="Get execution logs for a specific timeframe",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "interval": {
+                        "timeframe": {
                             "type": "string",
-                            "description": "Time interval (e.g., 'last week', 'last month', 'last 3 days')"
+                            "description": "Timeframe for logs (e.g., 'last week', 'today', 'yesterday')"
                         },
                         "page": {
                             "type": "integer",
-                            "description": "Page number",
+                            "description": "Page number for pagination",
                             "default": 1
                         },
                         "limit": {
@@ -265,7 +275,7 @@ async def main():
                             "default": 10
                         }
                     },
-                    "required": ["interval"]
+                    "required": ["timeframe"]
                 },
             )
         ]
@@ -332,44 +342,17 @@ async def main():
                     except Exception as e:
                         logger.error(f"Error in execute: {e}")
                         return [types.TextContent(type="text", text=f"Error executing operation: {str(e)}")]
-                
+
                 case "executionlogs":
                     try:
-                        if not arguments or "interval" not in arguments:
-                            raise ValueError("Missing required interval argument")
-
-                        from datetime import datetime, timedelta
-                        today = datetime.now()
+                        if not arguments or "timeframe" not in arguments:
+                            raise ValueError("Timeframe is required")
                         
-                        # Parse the interval
-                        interval = arguments["interval"].lower()
-                        if "last week" in interval:
-                            start_date = today - timedelta(days=7)
-                        elif "last month" in interval:
-                            start_date = today - timedelta(days=30)
-                        elif "last" in interval and "days" in interval:
-                            try:
-                                days = int(''.join(filter(str.isdigit, interval)))
-                                start_date = today - timedelta(days=days)
-                            except ValueError:
-                                start_date = today - timedelta(days=7)  # Default to a week
-                        else:
-                            start_date = today - timedelta(days=7)  # Default to a week
-
-                        # Format dates
-                        start_date_str = start_date.strftime("%Y%m%d")
-                        end_date_str = today.strftime("%Y%m%d")
-
-                        # Get optional parameters
+                        timeframe = arguments["timeframe"]
                         page = arguments.get("page", 1)
                         limit = arguments.get("limit", 10)
-
-                        result = await client.get_execution_logs(
-                            start_date_str,
-                            end_date_str,
-                            page,
-                            limit
-                        )
+                        
+                        result = await client.get_execution_logs(timeframe, page, limit)
                         return [
                             types.TextContent(
                                 type="text",
@@ -380,7 +363,7 @@ async def main():
                     except Exception as e:
                         logger.error(f"Error in executionlogs: {e}")
                         return [types.TextContent(type="text", text=f"Error getting execution logs: {str(e)}")]
-
+                
                 case _:
                     logger.error(f"Unknown tool: {name}")
                     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
